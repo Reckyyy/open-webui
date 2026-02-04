@@ -1798,7 +1798,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                         )
 
                         # Wrap the tool function to inject event_emitter from extra_params
-                        callable = get_async_tool_function_and_apply_extra_params(
+                        tool_callable = get_async_tool_function_and_apply_extra_params(
                             tool_function,
                             {
                                 "__event_emitter__": extra_params.get(
@@ -1812,7 +1812,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                                 **tool_spec,
                                 "name": f"{server_id}_{tool_spec['name']}",
                             },
-                            "callable": callable,
+                            "callable": tool_callable,
                             "type": "mcp",
                             "client": mcp_clients[server_id],
                             "direct": False,

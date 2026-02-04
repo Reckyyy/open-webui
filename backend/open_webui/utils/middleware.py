@@ -97,6 +97,7 @@ from open_webui.utils.tools import (
     get_tools,
     get_updated_tool_function,
     has_tool_server_access,
+    get_async_tool_function_and_apply_extra_params,
 )
 from open_webui.utils.plugin import load_function_module_by_id
 from open_webui.utils.filter import (
@@ -1731,12 +1732,57 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                     tool_specs = await mcp_clients[server_id].list_tool_specs()
                     for tool_spec in tool_specs:
 
-                        def make_tool_function(client, function_name):
-                            async def tool_function(**kwargs):
-                                return await client.call_tool(
-                                    function_name,
-                                    function_args=kwargs,
-                                )
+                        def make_tool_function(client, function_name, server_name):
+                            async def tool_function(
+                                __event_emitter__=None, **kwargs
+                            ):
+                                # Emit status event before execution
+                                if __event_emitter__:
+                                    await __event_emitter__(
+                                        {
+                                            "type": "status",
+                                            "data": {
+                                                "status": "in_progress",
+                                                "description": f"Running MCP tool: {server_name}/{function_name}",
+                                                "done": False,
+                                            },
+                                        }
+                                    )
+
+                                try:
+                                    result = await client.call_tool(
+                                        function_name,
+                                        function_args=kwargs,
+                                    )
+
+                                    # Emit completion status
+                                    if __event_emitter__:
+                                        await __event_emitter__(
+                                            {
+                                                "type": "status",
+                                                "data": {
+                                                    "status": "complete",
+                                                    "description": f"Completed MCP tool: {server_name}/{function_name}",
+                                                    "done": True,
+                                                },
+                                            }
+                                        )
+
+                                    return result
+                                except Exception as e:
+                                    # Emit error status
+                                    if __event_emitter__:
+                                        await __event_emitter__(
+                                            {
+                                                "type": "status",
+                                                "data": {
+                                                    "status": "error",
+                                                    "description": f"Error in MCP tool {server_name}/{function_name}: {str(e)}",
+                                                    "done": True,
+                                                },
+                                            }
+                                        )
+                                    raise
 
                             return tool_function
 
@@ -1748,7 +1794,17 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                                 continue
 
                         tool_function = make_tool_function(
-                            mcp_clients[server_id], tool_spec["name"]
+                            mcp_clients[server_id], tool_spec["name"], server_id
+                        )
+
+                        # Wrap the tool function to inject event_emitter from extra_params
+                        callable = get_async_tool_function_and_apply_extra_params(
+                            tool_function,
+                            {
+                                "__event_emitter__": extra_params.get(
+                                    "__event_emitter__"
+                                ),
+                            },
                         )
 
                         mcp_tools_dict[f"{server_id}_{tool_spec['name']}"] = {
@@ -1756,7 +1812,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                                 **tool_spec,
                                 "name": f"{server_id}_{tool_spec['name']}",
                             },
-                            "callable": tool_function,
+                            "callable": callable,
                             "type": "mcp",
                             "client": mcp_clients[server_id],
                             "direct": False,
